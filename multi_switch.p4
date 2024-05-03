@@ -231,14 +231,96 @@ control Ingress(/* User */
 		ig_tm_md.ucast_egress_port = port;
 	}
 
-	table send_t {
+    @hidden action switch1_from_switch () {
+        // no statements here, by design
+    }
+    @hidden action switch1_from_server () {
+        // no statements here, by design
+    }
+    @hidden action switch2_from_switch () {
+        // no statements here, by design
+    }
+    @hidden action switch2_from_server () {
+        // no statements here, by design
+    }
+    @hidden action switch_default () {
+        // no statements here, by design
+    }
+
+    @hidden table select_ingress_port {
+        key = {
+            ig_intr_md.ingress_port : exact;
+        }
+        actions = {
+            switch1_from_switch;
+            switch1_from_server;
+            switch2_from_switch;
+            switch2_from_server;
+            switch_default;
+        }
+        const entries = {
+            0 : switch1_from_switch;   //port 15/0
+            12 : switch1_from_switch;  //port 17/0
+
+            128 : switch1_from_server; //port 1/0
+
+            4 : switch2_from_switch;   //port 16/0
+            8 : switch2_from_switch;   //port 18/0
+
+            136 : switch2_from_server; //port 2/0 
+        }
+        const default_action = switch_default;
+    }
+
+
+	table switch1_from_switch_table {
 		key = { ig_intr_md.ingress_port: exact;}
 		actions = { send;}
+        const entries = {
+            0:send(128);
+            12:send(128);
+        }
+	}
+    table switch1_from_server_table {
+		key = { ig_intr_md.ingress_port: exact;}
+		actions = { send;}
+        const entries = {
+            128:send(0);
+        }
+	}
+    table switch2_from_switch_table {
+		key = { ig_intr_md.ingress_port: exact;}
+		actions = { send;}
+        const entries = {
+            4:send(136);
+            8:send(136);
+        }
+	}
+    table switch2_from_server_table {
+		key = { ig_intr_md.ingress_port: exact;}
+		actions = { send;}
+        const entries = {
+            136:send(4);
+        }
+	}
+    table send_t {
+		key = { ig_intr_md.ingress_port: exact;}
+		actions = { send;}
+        const entries = {
+            128:send(136);
+            136:send(128);
+        }
 	}
 
 
 apply {
-	send_t.apply();
+    switch (select_ingress_port.apply().action_run) {
+        switch1_from_switch: { switch1_from_switch_table.apply(); }
+        switch1_from_server: { switch1_from_server_table.apply(); }
+        switch2_from_switch: { switch2_from_switch_table.apply(); }
+        switch2_from_server: { switch2_from_server_table.apply(); }
+    }
+	//send_t.apply();
 }
 }
 control IngressDeparser(packet_out pkt,
