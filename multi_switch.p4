@@ -128,6 +128,7 @@ struct my_ingress_headers_t{
 
 struct my_ingress_metadata_t {
     bit<32> ll;
+    bit<16> ecmp_select;
 }
 
     /***********************  P A R S E R  **************************/
@@ -139,6 +140,7 @@ parser IngressParser(packet_in        pkt,
     /* Intrinsic */
     out ingress_intrinsic_metadata_t  ig_intr_md)
 {
+    //Hash<bit<16>>(HashAlgorithm_t.CRC16) h;
     /* This is a mandatory state, required by Tofino Architecture */
     state start {
         pkt.extract(ig_intr_md);
@@ -204,15 +206,50 @@ parser IngressParser(packet_in        pkt,
     }
     
     state parse_tcp {
-    meta.ll=pkt.lookahead<bit<32>>();
+        meta.ll=pkt.lookahead<bit<32>>();
         pkt.extract(hdr.tcp);
         transition accept;
     }
     
     state parse_udp {
-      meta.ll=pkt.lookahead<bit<32>>();
+        meta.ll=pkt.lookahead<bit<32>>();
         pkt.extract(hdr.udp);
         transition accept;
+    }
+
+
+}
+control Ecmp_hashcode(    
+    in my_ingress_headers_t                          hdr,
+    out my_ingress_metadata_t                        meta,
+    in bit<16>                                       ecmp_count
+    )
+{
+    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_udp;
+    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_tcp;
+    bit<16> hashcode = 0;
+
+    apply{
+        if(hdr.ipv4.isValid()){
+            if(hdr.udp.isValid()){
+                hashcode = hash_udp.get(
+                        { hdr.ipv4.src_addr,
+                        hdr.ipv4.dst_addr,
+                        hdr.ipv4.protocol,
+                        hdr.udp.src_port,
+                        hdr.udp.dst_port }
+                );
+            }else if(hdr.tcp.isValid()){
+                hashcode = hash_tcp.get(
+                        { hdr.ipv4.src_addr,
+                        hdr.ipv4.dst_addr,
+                        hdr.ipv4.protocol,
+                        hdr.tcp.src_port,
+                        hdr.tcp.dst_port }
+                );
+            }
+        }
+        meta.ecmp_select = hashcode%ecmp_count;
     }
 
 
@@ -226,11 +263,15 @@ control Ingress(/* User */
     inout ingress_intrinsic_metadata_for_deparser_t  ig_dprsr_md,
     inout ingress_intrinsic_metadata_for_tm_t        ig_tm_md)
 {
+    bit<16>hashcode = 0;
+    bit<16>ecmp_count = 2;
+
+    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_udp;
+    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_tcp;
 
 	action send(PortId_t port) {
 		ig_tm_md.ucast_egress_port = port;
 	}
-
     @hidden action switch1_from_switch () {
         // no statements here, by design
     }
@@ -282,10 +323,11 @@ control Ingress(/* User */
         }
 	}
     table switch1_from_server_table {
-		key = { ig_intr_md.ingress_port: exact;}
+		key = { meta.ecmp_select : exact;}
 		actions = { send;}
         const entries = {
-            128:send(0);
+            0:send(0);
+            1:send(12);
         }
 	}
     table switch2_from_switch_table {
@@ -297,10 +339,11 @@ control Ingress(/* User */
         }
 	}
     table switch2_from_server_table {
-		key = { ig_intr_md.ingress_port: exact;}
+		key = { meta.ecmp_select : exact;}
 		actions = { send;}
         const entries = {
-            136:send(4);
+            0:send(4);
+            1:send(8);
         }
 	}
     table send_t {
@@ -311,14 +354,40 @@ control Ingress(/* User */
             136:send(128);
         }
 	}
-
-
+    Ecmp_hashcode() hash;
 apply {
+    //hash.apply(hdr,meta,2);
+    // if(hdr.ipv4.isValid()){
+    //         if(hdr.udp.isValid()){
+    //             hashcode = hash_udp.get(
+    //                     { hdr.ipv4.src_addr,
+    //                     hdr.ipv4.dst_addr,
+    //                     hdr.ipv4.protocol,
+    //                     hdr.udp.src_port,
+    //                     hdr.udp.dst_port }
+    //             );
+    //         }else if(hdr.tcp.isValid()){
+    //             hashcode = hash_tcp.get(
+    //                     { hdr.ipv4.src_addr,
+    //                     hdr.ipv4.dst_addr,
+    //                     hdr.ipv4.protocol,
+    //                     hdr.tcp.src_port,
+    //                     hdr.tcp.dst_port }
+    //             );
+    //         }
+    // }
+    // meta.ecmp_select = hashcode%ecmp_count;
     switch (select_ingress_port.apply().action_run) {
         switch1_from_switch: { switch1_from_switch_table.apply(); }
-        switch1_from_server: { switch1_from_server_table.apply(); }
+        switch1_from_server: {
+            hash.apply(hdr,meta,ecmp_count);
+            switch1_from_server_table.apply(); 
+        }
         switch2_from_switch: { switch2_from_switch_table.apply(); }
-        switch2_from_server: { switch2_from_server_table.apply(); }
+        switch2_from_server: {
+            hash.apply(hdr,meta,ecmp_count);
+            switch2_from_server_table.apply(); 
+        }
     }
 	//send_t.apply();
 }
