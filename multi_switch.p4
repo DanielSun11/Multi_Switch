@@ -23,6 +23,17 @@ struct ports {
     bit<16>  sp;
     bit<16>  dp;
 }
+#define SW1_H_P1 28    //port 13/0
+#define SW1_H_P2 24    //port 19/0
+
+#define SW1_SW2_P1 12  //port 15/0
+#define SW1_SW2_P2 0   //port 17/0
+
+#define SW2_SW1_P1 4   //port 16/0
+#define SW2_SW1_P2 8   //port 18/0
+
+#define SW2_H_P1 20    //port 14/0
+#define SW2_H_P2 16    //port 20/0
 
 
 type bit<48> mac_addr_t;
@@ -141,7 +152,6 @@ parser IngressParser(packet_in        pkt,
     /* Intrinsic */
     out ingress_intrinsic_metadata_t  ig_intr_md)
 {
-    //Hash<bit<16>>(HashAlgorithm_t.CRC16) h;
     /* This is a mandatory state, required by Tofino Architecture */
     state start {
         pkt.extract(ig_intr_md);
@@ -253,8 +263,6 @@ control Ecmp_hashcode(
         }
         meta.ecmp_select = hashcode%ecmp_count;
     }
-
-
 }
 control Ingress(/* User */
     inout my_ingress_headers_t                       hdr,
@@ -268,8 +276,6 @@ control Ingress(/* User */
     bit<16>hashcode = 0;
     bit<16>ecmp_count = 2;
 
-    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_udp;
-    Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_tcp;
 
 	action send(PortId_t port) {
 		ig_tm_md.ucast_egress_port = port;
@@ -303,17 +309,17 @@ control Ingress(/* User */
         }
         const entries = {
             //swtich2->switch1
-            0   :   switch1_from_switch;    //port 17/0
-            12  :   switch1_from_switch;    //port 15/0
+            SW1_SW2_P2   :   switch1_from_switch;    //SW1_SW2_P2
+            SW1_SW2_P1  :   switch1_from_switch;     //SW1_SW2_P1
             //server->switch1
-            128 :   switch1_from_server;    //port 1/0
-            24  :   switch1_from_server;    //port 19/0
+            SW1_H_P1 :    switch1_from_server;       //SW1_H_P1
+            SW1_H_P2  :   switch1_from_server;       //SW1_H_P2
             //switch1->switch2
-            4   :   switch2_from_switch;    //port 16/0
-            8   :   switch2_from_switch;    //port 18/0
+            SW2_SW1_P1   :   switch2_from_switch;    //SW2_SW1_P1
+            SW2_SW1_P2   :   switch2_from_switch;    //SW2_SW1_P2
             //server->switch2
-            136 :   switch2_from_server;    //port 2/0 
-            16  :   switch2_from_server;    //port 20/0 
+            SW2_H_P1 :    switch2_from_server;       //SW2_H_P1
+            SW2_H_P2  :   switch2_from_server;       //SW2_H_P2
         }
         const default_action = switch_default;
     }
@@ -322,55 +328,55 @@ control Ingress(/* User */
 	table switch1_from_switch_table {
 		key = { hdr.ipv4.dst_addr : ternary;}
 		actions = { send;}
-        size = 512;
+        size = 8;
         const entries = {
-            0x0e0e0e00 &&& 0xffffff00 : send(24); //14.14.14.x -> 19/0 24
-            0x0d0d0d00 &&& 0xffffff00 : send(128);//13.13.13.x -> 1/0 128
+            0x0e0e0e00 &&& 0xffffff00 : send(SW1_H_P2); //14.14.14.x -> SW1_H_P2 19/0 24
+            0x0d0d0d00 &&& 0xffffff00 : send(SW1_H_P1); //13.13.13.x -> SW1_H_P1 13/0 28
         }
 	}
     table switch1_from_server_table {
 		key = { meta.ecmp_select : exact;}
 		actions = { send;}
         const entries = {
-            0:send(12);
-            1:send(0);
+            0:send(SW1_SW2_P1);
+            1:send(SW1_SW2_P2);
         }
 	}
     table switch2_from_switch_table {
 		key = { hdr.ipv4.dst_addr : ternary;}
 		actions = { send;}
-        size = 512;
+        size = 8;
         const entries = {
-            0x0e0e0e00 &&& 0xffffff00 : send(16); //14.14.14.x -> 20/0 16
-            0x0d0d0d00 &&& 0xffffff00 : send(136);//13.13.13.x -> 2/0 136
+            0x0e0e0e00 &&& 0xffffff00 : send(SW2_H_P2); //14.14.14.x ->SW2_H_P2 20/0 16
+            0x0d0d0d00 &&& 0xffffff00 : send(SW2_H_P1); //13.13.13.x ->SW2_H_P1 14/0 20
         }
 	}
     table switch2_from_server_table {
 		key = { meta.ecmp_select : exact;}
 		actions = { send;}
         const entries = {
-            0:send(4);
-            1:send(8);
+            0:send(SW2_SW1_P1);
+            1:send(SW2_SW1_P2);
         }
 	}
     table switch1_arp_table {
 		key = { hdr.ethernet.ether_type : exact;
                 hdr.arp.proto_dst_addr  : ternary;}
 		actions = { send;}
-        size = 512;
+        size = 8;
         const entries = {
-            ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(24); //14.14.14.x -> 20/0 16
-            ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(128);//13.13.13.x -> 2/0 136
+            ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(SW1_H_P2); //14.14.14.x -> SW1_H_P2 19/0 24
+            ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(SW1_H_P1); //13.13.13.x -> SW1_H_P1 13/0 28
         }
 	}
     table switch2_arp_table {
 		key = { hdr.ethernet.ether_type : exact;
                 hdr.arp.proto_dst_addr  : ternary;}
 		actions = { send;}
-        size = 512;
+        size = 8;
         const entries = {
-            ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(16); //14.14.14.x -> 20/0 16
-            ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(136);//13.13.13.x -> 2/0 136
+            ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(SW2_H_P2); //14.14.14.x -> SW2_H_P2 20/0 16
+            ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(SW2_H_P1); //13.13.13.x -> SW2_H_P1 14/0 20
         }
 	}
     // table send_t {
@@ -405,6 +411,158 @@ apply {
 	//send_t.apply();
 }
 }
+// control Ingress1(/* User */
+//     inout my_ingress_headers_t                       hdr,
+//     inout my_ingress_metadata_t                      meta,
+//     /* Intrinsic */
+//     in    ingress_intrinsic_metadata_t               ig_intr_md,
+//     in    ingress_intrinsic_metadata_from_parser_t   ig_prsr_md,
+//     inout ingress_intrinsic_metadata_for_deparser_t  ig_dprsr_md,
+//     inout ingress_intrinsic_metadata_for_tm_t        ig_tm_md)
+// {
+//     bit<16>hashcode = 0;
+//     bit<16>ecmp_count = 2;
+
+//     //Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_udp;
+//     //Hash<bit<16>>(HashAlgorithm_t.CRC16) hash_tcp;
+
+// 	action send(PortId_t port) {
+// 		ig_tm_md.ucast_egress_port = port;
+// 	}
+//     @hidden action switch1_from_switch () {
+//         // no statements here, by design
+//     }
+//     @hidden action switch1_from_server () {
+//         // no statements here, by design
+//     }
+//     @hidden action switch2_from_switch () {
+//         // no statements here, by design
+//     }
+//     @hidden action switch2_from_server () {
+//         // no statements here, by design
+//     }
+//     @hidden action switch_default () {
+//         // no statements here, by design
+//     }
+
+//     @hidden table select_ingress_port {
+//         key = {
+//             ig_intr_md.ingress_port : exact;
+//         }
+//         actions = {
+//             switch1_from_switch;
+//             switch1_from_server;
+//             switch2_from_switch;
+//             switch2_from_server;
+//             switch_default;
+//         }
+//         const entries = {
+//             //swtich2->switch1
+//             0   :   switch1_from_switch;    //port 17/0
+//             12  :   switch1_from_switch;    //port 15/0
+//             //server->switch1
+//             28 :   switch1_from_server;    //port 1/0
+//             24  :   switch1_from_server;    //port 19/0
+//             //switch1->switch2
+//             4   :   switch2_from_switch;    //port 16/0
+//             8   :   switch2_from_switch;    //port 18/0
+//             //server->switch2
+//             20 :   switch2_from_server;    //port 2/0 
+//             16  :   switch2_from_server;    //port 20/0 
+//         }
+//         const default_action = switch_default;
+//     }
+
+
+// 	table switch1_from_switch_table {
+// 		key = { hdr.ipv4.dst_addr : ternary;}
+// 		actions = { send;}
+//         size = 8;
+//         const entries = {
+//             0x0e0e0e00 &&& 0xffffff00 : send(24); //14.14.14.x -> 19/0 24
+//             0x0d0d0d00 &&& 0xffffff00 : send(28);//13.13.13.x -> 1/0 28
+//         }
+// 	}
+//     table switch1_from_server_table {
+// 		key = { meta.ecmp_select : exact;}
+// 		actions = { send;}
+//         const entries = {
+//             0:send(12);
+//             1:send(0);
+//         }
+// 	}
+//     table switch2_from_switch_table {
+// 		key = { hdr.ipv4.dst_addr : ternary;}
+// 		actions = { send;}
+//         size = 8;
+//         const entries = {
+//             0x0e0e0e00 &&& 0xffffff00 : send(16); //14.14.14.x -> 20/0 16
+//             0x0d0d0d00 &&& 0xffffff00 : send(20);//13.13.13.x -> 14/0 20
+//         }
+// 	}
+//     table switch2_from_server_table {
+// 		key = { meta.ecmp_select : exact;}
+// 		actions = { send;}
+//         const entries = {
+//             0:send(4);
+//             1:send(8);
+//         }
+// 	}
+//     table switch1_arp_table {
+// 		key = { hdr.ethernet.ether_type : exact;
+//                 hdr.arp.proto_dst_addr  : ternary;}
+// 		actions = { send;}
+//         size = 8;
+//         const entries = {
+//             ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(24); //14.14.14.x -> 20/0 16
+//             ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(28);//13.13.13.x -> 13/0 28
+//         }
+// 	}
+//     table switch2_arp_table {
+// 		key = { hdr.ethernet.ether_type : exact;
+//                 hdr.arp.proto_dst_addr  : ternary;}
+// 		actions = { send;}
+//         size = 8;
+//         const entries = {
+//             ((bit<16>)ether_type_t.ARP , 0x0e0e0e00 &&& 0xffffff00) : send(16); //14.14.14.x -> 20/0 16
+//             ((bit<16>)ether_type_t.ARP , 0x0d0d0d00 &&& 0xffffff00) : send(20);//13.13.13.x -> 14/0 20
+//         }
+// 	}
+//     // table send_t {
+// 	// 	key = { ig_intr_md.ingress_port: exact;}
+// 	// 	actions = { send;}
+//     //     const entries = {
+//     //         128:send(136);
+//     //         136:send(128);
+//     //     }
+// 	// }
+//     Ecmp_hashcode() hash;
+// apply {
+
+//     switch (select_ingress_port.apply().action_run) {
+//         switch1_from_switch: {
+//             switch1_arp_table.apply();
+//             switch1_from_switch_table.apply(); 
+//         }
+//         switch1_from_server: {
+//             hash.apply(hdr,meta,ecmp_count);
+//             switch1_from_server_table.apply(); 
+//         }
+//         switch2_from_switch: {
+//             switch2_arp_table.apply();
+//             switch2_from_switch_table.apply(); 
+//         }
+//         switch2_from_server: {
+//             hash.apply(hdr,meta,ecmp_count);
+//             switch2_from_server_table.apply(); 
+//         }
+//     }
+// 	//send_t.apply();
+// }
+// }
+
+
+
 control IngressDeparser(packet_out pkt,
     /* User */
     inout my_ingress_headers_t                       hdr,
@@ -418,22 +576,22 @@ control IngressDeparser(packet_out pkt,
      Checksum() ipv4_checksum;
     
     apply {
-        if (hdr.ipv4.isValid()) {
-            hdr.ipv4.hdr_checksum = ipv4_checksum.update({
-                hdr.ipv4.version,
-                hdr.ipv4.ihl,
-                hdr.ipv4.diffserv,
-                hdr.ipv4.res,
-                hdr.ipv4.total_len,
-                hdr.ipv4.identification,
-                hdr.ipv4.flags,
-                hdr.ipv4.frag_offset,
-                hdr.ipv4.ttl,
-                hdr.ipv4.protocol,
-                hdr.ipv4.src_addr,
-                hdr.ipv4.dst_addr
-            });  
-        }
+        // if (hdr.ipv4.isValid()) {
+        //     hdr.ipv4.hdr_checksum = ipv4_checksum.update({
+        //         hdr.ipv4.version,
+        //         hdr.ipv4.ihl,
+        //         hdr.ipv4.diffserv,
+        //         hdr.ipv4.res,
+        //         hdr.ipv4.total_len,
+        //         hdr.ipv4.identification,
+        //         hdr.ipv4.flags,
+        //         hdr.ipv4.frag_offset,
+        //         hdr.ipv4.ttl,
+        //         hdr.ipv4.protocol,
+        //         hdr.ipv4.src_addr,
+        //         hdr.ipv4.dst_addr
+        //     });  
+        //}
         pkt.emit(hdr);
         
     }
@@ -494,8 +652,6 @@ control Egress(
 }
 }
 
-
-
     /*********************  D E P A R S E R  ************************/
 
 control EgressDeparser(packet_out pkt,
@@ -521,5 +677,14 @@ Pipeline(
     Egress(),
     EgressDeparser()
 ) pipe;
+
+Pipeline(
+    IngressParser(),
+    Ingress(),
+    IngressDeparser(),
+    EgressParser(),
+    Egress(),
+    EgressDeparser()
+) pipe1;
 
 Switch(pipe) main;
