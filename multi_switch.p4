@@ -310,15 +310,15 @@ control Ingress(/* User */
         const entries = {
             //swtich2->switch1
             SW1_SW2_P2   :   switch1_from_switch;    //SW1_SW2_P2
-            SW1_SW2_P1  :   switch1_from_switch;     //SW1_SW2_P1
+            SW1_SW2_P1   :   switch1_from_switch;     //SW1_SW2_P1
             //server->switch1
-            SW1_H_P1 :    switch1_from_server;       //SW1_H_P1
+            SW1_H_P1  :    switch1_from_server;       //SW1_H_P1
             SW1_H_P2  :   switch1_from_server;       //SW1_H_P2
             //switch1->switch2
             SW2_SW1_P1   :   switch2_from_switch;    //SW2_SW1_P1
             SW2_SW1_P2   :   switch2_from_switch;    //SW2_SW1_P2
             //server->switch2
-            SW2_H_P1 :    switch2_from_server;       //SW2_H_P1
+            SW2_H_P1  :    switch2_from_server;       //SW2_H_P1
             SW2_H_P2  :   switch2_from_server;       //SW2_H_P2
         }
         const default_action = switch_default;
