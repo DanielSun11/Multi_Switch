@@ -326,12 +326,13 @@ control Ingress(/* User */
 
 
 	table switch1_from_switch_table {
-		key = { hdr.ipv4.dst_addr : ternary;}
+		key = { hdr.ethernet.ether_type : exact;
+                hdr.ipv4.dst_addr : ternary;}
 		actions = { send;}
         size = 8;
         const entries = {
-            0x0e0e0e00 &&& 0xffffff00 : send(SW1_H_P2); //14.14.14.x -> SW1_H_P2 19/0 24
-            0x0d0d0d00 &&& 0xffffff00 : send(SW1_H_P1); //13.13.13.x -> SW1_H_P1 13/0 28
+            ((bit<16>)ether_type_t.IPV4,0x0e0e0e00 &&& 0xffffff00) : send(SW1_H_P2); //14.14.14.x -> SW1_H_P2 19/0 24
+            ((bit<16>)ether_type_t.IPV4,0x0d0d0d00 &&& 0xffffff00) : send(SW1_H_P1); //13.13.13.x -> SW1_H_P1 13/0 28
         }
 	}
     table switch1_from_server_table {
@@ -343,12 +344,13 @@ control Ingress(/* User */
         }
 	}
     table switch2_from_switch_table {
-		key = { hdr.ipv4.dst_addr : ternary;}
+		key = { hdr.ethernet.ether_type : exact;
+                hdr.ipv4.dst_addr : ternary;}
 		actions = { send;}
         size = 8;
         const entries = {
-            0x0e0e0e00 &&& 0xffffff00 : send(SW2_H_P2); //14.14.14.x ->SW2_H_P2 20/0 16
-            0x0d0d0d00 &&& 0xffffff00 : send(SW2_H_P1); //13.13.13.x ->SW2_H_P1 14/0 20
+            ((bit<16>)ether_type_t.IPV4,0x0e0e0e00 &&& 0xffffff00) : send(SW2_H_P2); //14.14.14.x ->SW2_H_P2 20/0 16
+            ((bit<16>)ether_type_t.IPV4,0x0d0d0d00 &&& 0xffffff00) : send(SW2_H_P1); //13.13.13.x ->SW2_H_P1 14/0 20
         }
 	}
     table switch2_from_server_table {
