@@ -440,7 +440,6 @@ control Ingress(/* User */
 	}
     Ecmp_hashcode() hash;
 apply {
-
     switch (select_ingress_port.apply().action_run) {
         switch1_from_switch: {
             switch1_arp_table.apply();
@@ -475,9 +474,6 @@ control IngressDeparser(packet_out pkt,
     /* Intrinsic */
     in    ingress_intrinsic_metadata_for_deparser_t  ig_dprsr_md)
 {
-        // Checksum() ipv4_checksum;
-    
-    
      Checksum() ipv4_checksum;
     
     apply {
@@ -510,8 +506,13 @@ control IngressDeparser(packet_out pkt,
 
 struct my_egress_headers_t {
     ethernet_h         ethernet;
+    arp_h              arp;
     vlan_tag_h[2]      vlan_tag;
     ipv4_h             ipv4;
+    icmp_h             icmp;
+    igmp_h             igmp;
+    tcp_h              tcp;
+    udp_h              udp;
 }
 
 
@@ -519,6 +520,8 @@ struct my_egress_headers_t {
     /********  G L O B A L   E G R E S S   M E T A D A T A  *********/
 
 struct my_egress_metadata_t {
+    /* ECN */
+    bit<1> exceeded_ecn_marking_threshold;
 
 }
 
@@ -534,6 +537,46 @@ parser EgressParser(packet_in        pkt,
     /* This is a mandatory state, required by Tofino Architecture */
     state start {
         pkt.extract(eg_intr_md);
+        transition meta_init;
+    }
+    state meta_init {
+        transition parse_ethernet;
+    }
+    state parse_ethernet {
+		pkt.extract(hdr.ethernet);
+		transition select(hdr.ethernet.ether_type){
+			(bit<16>) ether_type_t.IPV4: parse_ipv4;
+			(bit<16>) ether_type_t.ARP: parse_arp;
+			default: accept;
+		}
+	}
+
+	state parse_ipv4 {
+		pkt.extract(hdr.ipv4);
+		transition select(hdr.ipv4.protocol){
+			(bit<8>) ip_proto_t.TCP: parse_tcp;
+			(bit<8>) ip_proto_t.UDP: parse_udp;
+            (bit<8>) ip_proto_t.ICMP: parse_icmp;
+		    default: accept;
+		}
+	}
+
+	state parse_arp {
+		pkt.extract(hdr.arp);
+		transition accept;
+	}
+
+	state parse_tcp {
+		pkt.extract(hdr.tcp);
+		transition accept;
+	}
+
+	state parse_udp {
+		pkt.extract(hdr.udp);
+        transition accept;
+	}
+    state parse_icmp {
+        pkt.extract(hdr.icmp);
         transition accept;
     }
 }
@@ -549,12 +592,40 @@ control Egress(
     in    egress_intrinsic_metadata_from_parser_t      eg_prsr_md,
     inout egress_intrinsic_metadata_for_deparser_t     eg_dprsr_md,
     inout egress_intrinsic_metadata_for_output_port_t  eg_oport_md)
-{
-    
-    
-
+{   
+    //using register store the ECN threshold
+    Register<bit<32>,bit<1>>(1,2500) reg_ecn_marking_threshold; // default = 1250 (100KB)
+	RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_threshold) cmp_ecn_marking_threshold = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			if((bit<32>)eg_intr_md.deq_qdepth >= reg_val){
+				rv = 1;
+			}
+			else {
+				rv = 0;
+			}
+		}
+	};
+    // for debugging ECN marking
+    Register<bit<32>,bit<1>>(1,2) reg_ecn_marking_cntr;
+    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_cntr) incr_ecn_marking_cntr = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			reg_val = reg_val + 1;
+		}
+	};
+    action dctcp_check_ecn_marking(){
+		meta.exceeded_ecn_marking_threshold = cmp_ecn_marking_threshold.execute(0);
+	}
+    action mark_ecn_ce_codepoint(){
+		hdr.ipv4.ecn = 0b11;
+	}
     apply {
-      
+        if(hdr.ipv4.ecn == 0b01 || hdr.ipv4.ecn == 0b10){
+            dctcp_check_ecn_marking();
+            if(meta.exceeded_ecn_marking_threshold == 1){
+                mark_ecn_ce_codepoint();
+                incr_ecn_marking_cntr.execute(0);
+            }
+        }
     }
 }
 
@@ -567,9 +638,26 @@ control EgressDeparser(packet_out pkt,
     /* Intrinsic */
     in    egress_intrinsic_metadata_for_deparser_t  eg_dprsr_md)
 {
-
+    
+    Checksum() ipv4_checksum;
     apply {
-          pkt.emit(hdr);
+        if (hdr.ipv4.isValid()) {
+            hdr.ipv4.hdr_checksum = ipv4_checksum.update({
+                hdr.ipv4.version,
+                hdr.ipv4.ihl,
+                hdr.ipv4.diffserv,
+                hdr.ipv4.ecn,
+                hdr.ipv4.total_len,
+                hdr.ipv4.identification,
+                hdr.ipv4.flags,
+                hdr.ipv4.frag_offset,
+                hdr.ipv4.ttl,
+                hdr.ipv4.protocol,
+                hdr.ipv4.src_addr,
+                hdr.ipv4.dst_addr
+            });  
+        }
+        pkt.emit(hdr);
     }
 }
 
