@@ -426,9 +426,55 @@ control Egress(
     in    egress_intrinsic_metadata_from_parser_t      eg_prsr_md,
     inout egress_intrinsic_metadata_for_deparser_t     eg_dprsr_md,
     inout egress_intrinsic_metadata_for_output_port_t  eg_oport_md)
-{   
-    //using register store the ECN threshold
-    Register<bit<32>,bit<1>>(1,2500) reg_ecn_marking_threshold; // default = 1250 (100KB)
+{  
+    // for debugging ECN marking
+    #ifdef DEBUG_ENABLED
+    Register<bit<32>,bit<1>>(1) reg_ecn_marking_cntr;
+    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_cntr) incr_ecn_marking_cntr = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			reg_val = reg_val |+| 1;
+		}
+	}; 
+    Register<bit<32>,bit<1>>(1) reg_dcqcn_probout_cntr;
+    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_dcqcn_probout_cntr) incr_dcqcn_probout_cntr = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			reg_val = reg_val |+| 1;
+		}
+	};
+    // Register<bit<32>,bit<1>>(1) reg_dcqcn_compare_cntr;
+    // RegisterAction<bit<32>,bit<1>,bit<1>>(reg_dcqcn_compare_cntr) incr_dcqcn_compare_cntr = {
+	// 	void apply(inout bit<32> reg_val, out bit<1> rv){
+	// 		reg_val = reg_val |+| 1;
+	// 	}
+	// };
+
+    Register<bit<32>,bit<1>>(1) reg_dcqcn_qdepth_vl;
+    RegisterAction<bit<32>, bit<1>, void>(reg_dcqcn_qdepth_vl) set_dcqcn_qdepth_vl = {
+		void apply(inout bit<32> reg_val){
+			reg_val = (bit<32>)eg_intr_md.deq_qdepth;
+		}
+	};
+    #endif
+    Register<bit<8>,bit<1>>(1) reg_dcqcn_random_vl;
+    RegisterAction<bit<8>, bit<1>, void>(reg_dcqcn_random_vl) set_dcqcn_random_vl = {
+		void apply(inout bit<8> reg_val){
+			reg_val = meta.dcqcn_random_number;
+		}
+	};
+    
+	// DCQCN (9)? DCTCP(5)?
+    Register<bit<8>,bit<1>>(1, 5) reg_cc_mode; // default: DCTCP (5)
+    RegisterAction<bit<8>,bit<1>,bit<8>>(reg_cc_mode) get_reg_cc_mode = {
+		void apply(inout bit<8> reg_val, out bit<8> rv){
+			rv = reg_val;
+		}
+	};
+	action get_cc_mode() {
+		meta.cc_mode = get_reg_cc_mode.execute(0);
+	}
+
+	// DCTCP
+	Register<bit<32>,bit<1>>(1,10000) reg_ecn_marking_threshold; // default = 1250 (100KB)
 	RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_threshold) cmp_ecn_marking_threshold = {
 		void apply(inout bit<32> reg_val, out bit<1> rv){
 			if((bit<32>)eg_intr_md.deq_qdepth >= reg_val){
@@ -439,27 +485,84 @@ control Egress(
 			}
 		}
 	};
-    // for debugging ECN marking
-    Register<bit<32>,bit<1>>(1,2) reg_ecn_marking_cntr;
-    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_cntr) incr_ecn_marking_cntr = {
-		void apply(inout bit<32> reg_val, out bit<1> rv){
-			reg_val = reg_val + 1;
-		}
-	};
-    action dctcp_check_ecn_marking(){
+
+	action dctcp_check_ecn_marking(){
 		meta.exceeded_ecn_marking_threshold = cmp_ecn_marking_threshold.execute(0);
 	}
-    action mark_ecn_ce_codepoint(){
+
+	action mark_ecn_ce_codepoint(){
 		hdr.ipv4.ecn = 0b11;
 	}
+
+	// DCQCN
+	action dcqcn_mark_probability(bit<8> value) {
+		meta.dcqcn_prob_output = value;
+        #ifdef DEBUG_ENABLED
+        incr_dcqcn_probout_cntr.execute(0);
+        #endif
+	}
+
+	table dcqcn_get_ecn_probability {
+		key = {
+			eg_intr_md.deq_qdepth : range; // 19 bits
+		}
+		actions = {
+			dcqcn_mark_probability;
+		}
+		const default_action = dcqcn_mark_probability(0); // default: no ecn mark
+		size = 1024;
+	}
+
+	Random<bit<8>>() random;  // random seed for sampling
+	action dcqcn_get_random_number(){
+		meta.dcqcn_random_number = random.get();
+        set_dcqcn_random_vl.execute(0);
+	}
+
+	action nop(){}
+
+	action dcqcn_check_ecn_marking() {
+		meta.exceeded_ecn_marking_threshold = (bit<1>)1;
+	}
+	
+	table dcqcn_compare_probability {
+		key = {
+			meta.dcqcn_prob_output : exact;
+			meta.dcqcn_random_number : exact;
+		}
+		actions = {
+			dcqcn_check_ecn_marking;
+			@defaultonly nop;
+		}
+		const default_action = nop();
+		size = 65536;
+	}
+
+
     apply {
-        if(hdr.ipv4.ecn == 0b01 || hdr.ipv4.ecn == 0b10){
-            dctcp_check_ecn_marking();
-            if(meta.exceeded_ecn_marking_threshold == 1){
-                mark_ecn_ce_codepoint();
-                incr_ecn_marking_cntr.execute(0);
-            }
-        }
+		/* ECN */
+		if (hdr.ipv4.isValid() && (hdr.ipv4.ecn == 0b01 || hdr.ipv4.ecn == 0b10)){
+			get_cc_mode();
+            #ifdef DEBUG_ENABLED
+            set_dcqcn_qdepth_vl.execute(0);
+            #endif
+			if (meta.cc_mode == 5) {
+				/* DCTCP (static marking) */
+				dctcp_check_ecn_marking(); 
+			} else if (meta.cc_mode == 9) {
+				/* DCQCN (RED-like marking) */
+				dcqcn_get_ecn_probability.apply(); // get probability to ecn-mark
+				dcqcn_get_random_number(); // get random number for sampling
+				dcqcn_compare_probability.apply();
+                
+			}
+			if (meta.exceeded_ecn_marking_threshold == 1){
+				mark_ecn_ce_codepoint();
+                #ifdef DEBUG_ENABLED
+				incr_ecn_marking_cntr.execute(0);
+                #endif
+			}
+		}
     }
 }
 

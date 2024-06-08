@@ -18,3 +18,5 @@
 
 #define SW2_H_P1 20    //port 14/0
 #define SW2_H_P2 16    //port 20/0
+
+#define DEBUG_ENABLED
