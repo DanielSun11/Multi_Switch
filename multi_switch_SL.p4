@@ -2,155 +2,13 @@
 //need to handle ARP
 #include <core.p4>
 #include <tna.p4>
-
-#define PRIME 2147483647
-/*************************************************************************
- ************* C O N S T A N T S    A N D   T Y P E S  *******************
-*************************************************************************/
-enum bit<16> ether_type_t {
-    TPID       = 0x8100,
-    IPV4       = 0x0800,
-    ARP        = 0x0806
-}
-
-enum bit<8>  ip_proto_t {
-    ICMP  = 1,
-    IGMP  = 2,
-    TCP   = 6,
-    UDP   = 17
-}
-struct ports {
-    bit<16>  sp;
-    bit<16>  dp;
-}
-#define SW1_H_P1 28    //port 13/0
-#define SW1_H_P2 24    //port 19/0
-
-#define SW1_SW3_P1 12  //port 15/0
-#define SW1_SW4_P1 0   //port 17/0
-
-#define SW2_SW3_P1 4   //port 16/0
-#define SW2_SW4_P1 8   //port 18/0
-
-#define SW3_SW1_P1 40   //port 21/0
-#define SW3_SW2_P1 32   //port 22/0
-
-#define SW4_SW1_P1 56   //port 23/0
-#define SW4_SW2_P1 48   //port 24/0
-
-#define SW2_H_P1 20    //port 14/0
-#define SW2_H_P2 16    //port 20/0
-
-
-
-
-type bit<48> mac_addr_t;
-
-/*************************************************************************
- ***********************  H E A D E R S  *********************************
- *************************************************************************/
-/*  Define all the headers the program will recognize             */
-/*  The actual sets of headers processed by each gress can differ */
-
-/* Standard ethernet header */
-header ethernet_h {
-    mac_addr_t    dst_addr;
-    mac_addr_t    src_addr;
-    ether_type_t  ether_type;
-}
-
-header vlan_tag_h {
-    bit<3>        pcp;
-    bit<1>        cfi;
-    bit<12>       vid;
-    ether_type_t  ether_type;
-}
-
-header arp_h {
-    bit<16>       htype;
-    bit<16>       ptype;
-    bit<8>        hlen;
-    bit<8>        plen;
-    bit<16>       opcode;
-    mac_addr_t    hw_src_addr;
-    bit<32>       proto_src_addr;
-    mac_addr_t    hw_dst_addr;
-    bit<32>       proto_dst_addr;
-}
-
-header ipv4_h {
-    bit<4>       version;
-    bit<4>       ihl;
-    bit<6>       diffserv;
-    bit<2>       ecn;
-    bit<16>      total_len;
-    bit<16>      identification;
-    bit<3>       flags;
-    bit<13>      frag_offset;
-    bit<8>       ttl;
-    bit<8>   protocol;
-    bit<16>      hdr_checksum;
-    bit<32>  src_addr;
-    bit<32>  dst_addr;
-}
-
-header icmp_h {
-    bit<16>  type_code;
-    bit<16>  checksum;
-}
-
-header igmp_h {
-    bit<16>  type_code;
-    bit<16>  checksum;
-}
-
-header tcp_h {
-    bit<16>  src_port;
-    bit<16>  dst_port;
-    bit<32>  seq_no;
-    bit<32>  ack_no;
-    bit<4>   data_offset;
-    bit<4>   res;
-    bit<8>   flags;
-    bit<16>  window;
-    bit<16>  checksum;
-    bit<16>  urgent_ptr;
-}
-
-header udp_h {
-    bit<16>  src_port;
-    bit<16>  dst_port;
-    bit<16>  len;
-    bit<16>  checksum;
-}
+#include "macros.p4"
+#include "headers.p4"
 
 /*************************************************************************
  **************  I N G R E S S   P R O C E S S I N G   *******************
  *************************************************************************/
  
-    /***********************  H E A D E R S  ************************/
-
-struct my_ingress_headers_t{
-    ethernet_h         ethernet;
-    arp_h              arp;
-    vlan_tag_h[2]      vlan_tag;
-    ipv4_h             ipv4;
-    icmp_h             icmp;
-    igmp_h             igmp;
-    tcp_h              tcp;
-    udp_h              udp;
-}
-
-
-    /******  G L O B A L   I N G R E S S   M E T A D A T A  *********/
-
-
-struct my_ingress_metadata_t {
-    bit<32> ll;
-    bit<16> ecmp_select;
-
-}
-
     /***********************  P A R S E R  **************************/
 
 parser IngressParser(packet_in        pkt,
@@ -501,30 +359,6 @@ control IngressDeparser(packet_out pkt,
  ****************  E G R E S S   P R O C E S S I N G   *******************
  *************************************************************************/
 
-    /***********************  H E A D E R S  ************************/
-
-
-struct my_egress_headers_t {
-    ethernet_h         ethernet;
-    arp_h              arp;
-    vlan_tag_h[2]      vlan_tag;
-    ipv4_h             ipv4;
-    icmp_h             icmp;
-    igmp_h             igmp;
-    tcp_h              tcp;
-    udp_h              udp;
-}
-
-
-
-    /********  G L O B A L   E G R E S S   M E T A D A T A  *********/
-
-struct my_egress_metadata_t {
-    /* ECN */
-    bit<1> exceeded_ecn_marking_threshold;
-
-}
-
     /***********************  P A R S E R  **************************/
 
 parser EgressParser(packet_in        pkt,
@@ -592,9 +426,55 @@ control Egress(
     in    egress_intrinsic_metadata_from_parser_t      eg_prsr_md,
     inout egress_intrinsic_metadata_for_deparser_t     eg_dprsr_md,
     inout egress_intrinsic_metadata_for_output_port_t  eg_oport_md)
-{   
-    //using register store the ECN threshold
-    Register<bit<32>,bit<1>>(1,2500) reg_ecn_marking_threshold; // default = 1250 (100KB)
+{  
+    // for debugging ECN marking
+    #ifdef DEBUG_ENABLED
+    Register<bit<32>,bit<1>>(1) reg_ecn_marking_cntr;
+    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_cntr) incr_ecn_marking_cntr = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			reg_val = reg_val |+| 1;
+		}
+	}; 
+    Register<bit<32>,bit<1>>(1) reg_dcqcn_probout_cntr;
+    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_dcqcn_probout_cntr) incr_dcqcn_probout_cntr = {
+		void apply(inout bit<32> reg_val, out bit<1> rv){
+			reg_val = reg_val |+| 1;
+		}
+	};
+    // Register<bit<32>,bit<1>>(1) reg_dcqcn_compare_cntr;
+    // RegisterAction<bit<32>,bit<1>,bit<1>>(reg_dcqcn_compare_cntr) incr_dcqcn_compare_cntr = {
+	// 	void apply(inout bit<32> reg_val, out bit<1> rv){
+	// 		reg_val = reg_val |+| 1;
+	// 	}
+	// };
+
+    Register<bit<32>,bit<1>>(1) reg_dcqcn_qdepth_vl;
+    RegisterAction<bit<32>, bit<1>, void>(reg_dcqcn_qdepth_vl) set_dcqcn_qdepth_vl = {
+		void apply(inout bit<32> reg_val){
+			reg_val = (bit<32>)eg_intr_md.deq_qdepth;
+		}
+	};
+    #endif
+    Register<bit<8>,bit<1>>(1) reg_dcqcn_random_vl;
+    RegisterAction<bit<8>, bit<1>, void>(reg_dcqcn_random_vl) set_dcqcn_random_vl = {
+		void apply(inout bit<8> reg_val){
+			reg_val = meta.dcqcn_random_number;
+		}
+	};
+    
+	// DCQCN (9)? DCTCP(5)?
+    Register<bit<8>,bit<1>>(1, 5) reg_cc_mode; // default: DCTCP (5)
+    RegisterAction<bit<8>,bit<1>,bit<8>>(reg_cc_mode) get_reg_cc_mode = {
+		void apply(inout bit<8> reg_val, out bit<8> rv){
+			rv = reg_val;
+		}
+	};
+	action get_cc_mode() {
+		meta.cc_mode = get_reg_cc_mode.execute(0);
+	}
+
+	// DCTCP
+	Register<bit<32>,bit<1>>(1,10000) reg_ecn_marking_threshold; // default = 1250 (100KB)
 	RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_threshold) cmp_ecn_marking_threshold = {
 		void apply(inout bit<32> reg_val, out bit<1> rv){
 			if((bit<32>)eg_intr_md.deq_qdepth >= reg_val){
@@ -605,27 +485,84 @@ control Egress(
 			}
 		}
 	};
-    // for debugging ECN marking
-    Register<bit<32>,bit<1>>(1,2) reg_ecn_marking_cntr;
-    RegisterAction<bit<32>,bit<1>,bit<1>>(reg_ecn_marking_cntr) incr_ecn_marking_cntr = {
-		void apply(inout bit<32> reg_val, out bit<1> rv){
-			reg_val = reg_val + 1;
-		}
-	};
-    action dctcp_check_ecn_marking(){
+
+	action dctcp_check_ecn_marking(){
 		meta.exceeded_ecn_marking_threshold = cmp_ecn_marking_threshold.execute(0);
 	}
-    action mark_ecn_ce_codepoint(){
+
+	action mark_ecn_ce_codepoint(){
 		hdr.ipv4.ecn = 0b11;
 	}
+
+	// DCQCN
+	action dcqcn_mark_probability(bit<8> value) {
+		meta.dcqcn_prob_output = value;
+        #ifdef DEBUG_ENABLED
+        incr_dcqcn_probout_cntr.execute(0);
+        #endif
+	}
+
+	table dcqcn_get_ecn_probability {
+		key = {
+			eg_intr_md.deq_qdepth : range; // 19 bits
+		}
+		actions = {
+			dcqcn_mark_probability;
+		}
+		const default_action = dcqcn_mark_probability(0); // default: no ecn mark
+		size = 1024;
+	}
+
+	Random<bit<8>>() random;  // random seed for sampling
+	action dcqcn_get_random_number(){
+		meta.dcqcn_random_number = random.get();
+        set_dcqcn_random_vl.execute(0);
+	}
+
+	action nop(){}
+
+	action dcqcn_check_ecn_marking() {
+		meta.exceeded_ecn_marking_threshold = (bit<1>)1;
+	}
+	
+	table dcqcn_compare_probability {
+		key = {
+			meta.dcqcn_prob_output : exact;
+			meta.dcqcn_random_number : exact;
+		}
+		actions = {
+			dcqcn_check_ecn_marking;
+			@defaultonly nop;
+		}
+		const default_action = nop();
+		size = 65536;
+	}
+
+
     apply {
-        if(hdr.ipv4.ecn == 0b01 || hdr.ipv4.ecn == 0b10){
-            dctcp_check_ecn_marking();
-            if(meta.exceeded_ecn_marking_threshold == 1){
-                mark_ecn_ce_codepoint();
-                incr_ecn_marking_cntr.execute(0);
-            }
-        }
+		/* ECN */
+		if (hdr.ipv4.isValid() && (hdr.ipv4.ecn == 0b01 || hdr.ipv4.ecn == 0b10)){
+			get_cc_mode();
+            #ifdef DEBUG_ENABLED
+            set_dcqcn_qdepth_vl.execute(0);
+            #endif
+			if (meta.cc_mode == 5) {
+				/* DCTCP (static marking) */
+				dctcp_check_ecn_marking(); 
+			} else if (meta.cc_mode == 9) {
+				/* DCQCN (RED-like marking) */
+				dcqcn_get_ecn_probability.apply(); // get probability to ecn-mark
+				dcqcn_get_random_number(); // get random number for sampling
+				dcqcn_compare_probability.apply();
+                
+			}
+			if (meta.exceeded_ecn_marking_threshold == 1){
+				mark_ecn_ce_codepoint();
+                #ifdef DEBUG_ENABLED
+				incr_ecn_marking_cntr.execute(0);
+                #endif
+			}
+		}
     }
 }
 
@@ -660,7 +597,6 @@ control EgressDeparser(packet_out pkt,
         pkt.emit(hdr);
     }
 }
-
 
 /************ F I N A L   P A C K A G E ******************************/
 Pipeline(
